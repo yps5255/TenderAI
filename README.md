@@ -15,7 +15,7 @@ DOC conversion requires LibreOffice. `LIBREOFFICE_PATH` can explicitly select it
 On Windows, if LibreOffice is not on PATH, set `LIBREOFFICE_PATH` for the current PowerShell session:
 
 ```powershell
-$env:LIBREOFFICE_PATH="F:\Program Files\LibreOffice\program\soffice.exe"
+$env:LIBREOFFICE_PATH="<path-to-libreoffice>\program\soffice.com"
 ```
 
 Maximum upload size: 500 MiB per file.
