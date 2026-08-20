@@ -1,5 +1,5 @@
 """Application data models."""
 
-from .document import Page, Paragraph, ParsedDocument, Table
+from .document import DocumentRole, Page, Paragraph, ParsedDocument, ProjectDocument, ProjectScan, Table
 
-__all__ = ["Page", "Paragraph", "ParsedDocument", "Table"]
+__all__ = ["DocumentRole", "Page", "Paragraph", "ParsedDocument", "ProjectDocument", "ProjectScan", "Table"]

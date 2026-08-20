@@ -69,7 +69,7 @@ def parse_pdf(path: Path, filename: str) -> ParsedDocument:
         document.close()
 
     if not paragraphs:
-        warnings.append("No extractable text was found in this PDF. OCR is not enabled.")
+        warnings.extend(["pdf_has_little_or_no_extractable_text", "possible_scanned_or_drawing_pdf"])
 
     return ParsedDocument(
         filename=filename,

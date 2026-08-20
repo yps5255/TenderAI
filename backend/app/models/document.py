@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -39,3 +40,30 @@ class ParsedDocument(BaseModel):
     pages: list[Page] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+
+
+class DocumentRole(str, Enum):
+    TENDER = "tender"
+    BID = "bid"
+    TECHNICAL_DRAWING = "technical_drawing"
+    ATTACHMENT = "attachment"
+    UNKNOWN = "unknown"
+
+
+class ProjectDocument(BaseModel):
+    filename: str
+    relative_path: str
+    file_type: str
+    role: DocumentRole
+    parse_success: bool
+    paragraph_count: int = 0
+    table_count: int = 0
+    warnings_count: int = 0
+    error_type: str | None = None
+    error_message_short: str | None = None
+
+
+class ProjectScan(BaseModel):
+    project_id: str
+    source_folder: str
+    files: list[ProjectDocument] = Field(default_factory=list)

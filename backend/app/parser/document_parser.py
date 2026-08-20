@@ -4,9 +4,10 @@ from pathlib import Path
 
 from ..models import ParsedDocument
 from .docx_parser import parse_docx
+from .legacy_doc_parser import parse_legacy_doc
 from .pdf_parser import DocumentParseError, parse_pdf
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
+SUPPORTED_EXTENSIONS = {".doc", ".docx", ".pdf"}
 
 
 def parse_document(path: Path, filename: str | None = None) -> ParsedDocument:
@@ -17,4 +18,6 @@ def parse_document(path: Path, filename: str | None = None) -> ParsedDocument:
         return parse_pdf(path, source_name)
     if extension == ".docx":
         return parse_docx(path, source_name)
-    raise DocumentParseError("Only .pdf and .docx files are supported.")
+    if extension == ".doc":
+        return parse_legacy_doc(path, source_name)
+    raise DocumentParseError("Only .doc, .docx, and .pdf files are supported.")
