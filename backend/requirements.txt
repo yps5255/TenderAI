@@ -4,3 +4,5 @@ python-multipart
 python-docx
 pymupdf
 pydantic
+pydantic-settings
+httpx

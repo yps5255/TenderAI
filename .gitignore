@@ -3,6 +3,7 @@
 *.pyc
 *.env
 *.env.*
+!.env.example
 data/
 uploads/
 outputs/

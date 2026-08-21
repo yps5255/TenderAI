@@ -21,3 +21,7 @@ $env:LIBREOFFICE_PATH="<path-to-libreoffice>\program\soffice.com"
 Maximum upload size: 500 MiB per file.
 
 PDF technical drawings are preserved and detected, but OCR and vision understanding are not yet implemented.
+
+## V0.2 development configuration
+
+The current AI provider boundary uses an OpenAI-compatible API. Development environment variables are listed in `.env.example`; copy its values into a local `.env` only when needed. API keys must not be committed. Local compatible providers may use an empty API key.
