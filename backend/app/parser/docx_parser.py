@@ -10,7 +10,7 @@ from docx.oxml.ns import qn
 from docx.table import Table as DocxTable
 from docx.text.paragraph import Paragraph as DocxParagraph
 
-from ..models import Page, Paragraph, ParsedDocument, Table
+from ..models import ContentBlockReference, Page, Paragraph, ParsedDocument, Table
 from .pdf_parser import DocumentParseError
 
 
@@ -32,6 +32,7 @@ def parse_docx(path: Path, filename: str) -> ParsedDocument:
 
     paragraphs: list[Paragraph] = []
     tables: list[Table] = []
+    content_order: list[ContentBlockReference] = []
     body_text: list[str] = []
 
     for item in _iter_body_items(document):
@@ -39,10 +40,12 @@ def parse_docx(path: Path, filename: str) -> ParsedDocument:
             text = item.text.strip()
             if text:
                 paragraphs.append(Paragraph(text=text, page_number=None, index=len(paragraphs)))
+                content_order.append(ContentBlockReference(type="paragraph", index=paragraphs[-1].index))
                 body_text.append(text)
         else:
             rows = [[cell.text.strip() for cell in row.cells] for row in item.rows]
             tables.append(Table(page_number=None, index=len(tables), rows=rows))
+            content_order.append(ContentBlockReference(type="table", index=tables[-1].index))
             body_text.extend("\t".join(row) for row in rows)
 
     metadata: dict[str, Any] = {
@@ -63,6 +66,7 @@ def parse_docx(path: Path, filename: str) -> ParsedDocument:
         paragraphs=paragraphs,
         tables=tables,
         pages=[Page(page_number=None, text="\n".join(body_text))],
+        content_order=content_order,
         metadata=metadata,
         warnings=warnings,
     )

@@ -53,6 +53,19 @@ def _table_fragments(table: Table, max_chars: int) -> list[_Fragment]:
 
 def _fragments(document: ParsedDocument, max_chars: int) -> list[_Fragment]:
     """Use parsed body content only; pages duplicate paragraph text for PDFs."""
+    if document.content_order:
+        paragraph_fragments = {paragraph.index: [] for paragraph in document.paragraphs}
+        for fragment in _paragraph_fragments(document, max_chars):
+            assert fragment.paragraph_index is not None
+            paragraph_fragments[fragment.paragraph_index].append(fragment)
+        table_fragments = {table.index: _table_fragments(table, max_chars) for table in document.tables}
+        ordered: list[_Fragment] = []
+        for reference in document.content_order:
+            if reference.type == "paragraph":
+                ordered.extend(paragraph_fragments.get(reference.index, []))
+            else:
+                ordered.extend(table_fragments.get(reference.index, []))
+        return ordered
     fragments = _paragraph_fragments(document, max_chars)
     for table in document.tables:
         fragments.extend(_table_fragments(table, max_chars))

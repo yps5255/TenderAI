@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,13 @@ class Page(BaseModel):
     text: str
 
 
+class ContentBlockReference(BaseModel):
+    """Reference to an existing paragraph or table in original body order."""
+
+    type: Literal["paragraph", "table"]
+    index: int
+
+
 class ParsedDocument(BaseModel):
     """Format-independent result returned by TenderAI document parsers."""
 
@@ -38,6 +45,7 @@ class ParsedDocument(BaseModel):
     paragraphs: list[Paragraph] = Field(default_factory=list)
     tables: list[Table] = Field(default_factory=list)
     pages: list[Page] = Field(default_factory=list)
+    content_order: list[ContentBlockReference] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 

@@ -122,7 +122,7 @@ class TenderAnalyzer:
         if not chunks:
             return TenderAnalysis(warnings=["document_has_no_extractable_content"])
 
-        warnings: list[str] = []
+        warnings: list[str] = [] if document.content_order else ["source_order_unavailable"]
         results: list[TenderChunkAnalysis] = []
         for chunk in chunks:
             try:
