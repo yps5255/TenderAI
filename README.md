@@ -25,3 +25,5 @@ PDF technical drawings are preserved and detected, but OCR and vision understand
 ## V0.2 development configuration
 
 The current AI provider boundary uses an OpenAI-compatible API. Development environment variables are listed in `.env.example`; copy its values into a local `.env` only when needed. API keys must not be committed. Local compatible providers may use an empty API key.
+
+`POST /api/v1/tenders/analyze` streams and parses one supported tender upload, then returns structured analysis. It requires OpenAI-compatible provider configuration; API keys are read from the environment or local `.env`, and local compatible endpoints may use an empty key. OCR, vision, and RAG are not implemented.

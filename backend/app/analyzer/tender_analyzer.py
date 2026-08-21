@@ -124,14 +124,16 @@ class TenderAnalyzer:
 
         warnings: list[str] = [] if document.content_order else ["source_order_unavailable"]
         results: list[TenderChunkAnalysis] = []
+        last_error: Exception | None = None
         for chunk in chunks:
             try:
                 result = self.provider.generate(self._messages(chunk), TenderChunkAnalysis)
                 results.append(self._validate_chunk_result(result, chunk, document, warnings))
-            except Exception:
+            except Exception as exc:
+                last_error = exc
                 warnings.append(f"chunk_analysis_failed:{chunk.chunk_index}")
         if not results:
-            raise TenderAnalyzerError("All document chunks failed analysis.")
+            raise TenderAnalyzerError("All document chunks failed analysis.") from last_error
         return self._merge(results, warnings)
 
     @staticmethod
