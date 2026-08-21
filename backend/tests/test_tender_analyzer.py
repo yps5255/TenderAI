@@ -6,7 +6,7 @@ import pytest
 
 from backend.app.analyzer.chunking import build_document_chunks
 from backend.app.analyzer.models import TenderChunkAnalysis
-from backend.app.analyzer.tender_analyzer import TenderAnalyzer, TenderAnalyzerError
+from backend.app.analyzer.tender_analyzer import TenderAnalyzer, TenderAnalyzerError, _merge_requirements
 from backend.app.llm.exceptions import LLMConnectionError
 from backend.app.llm.fake import FakeLLMProvider
 from backend.app.models import EvidenceReference, ImportantDate, Paragraph, ParsedDocument, RequirementItem, ScoringItem, Table, TenderAnalysis
@@ -208,3 +208,78 @@ def test_analyzer_output_is_tender_analysis() -> None:
     source = document(paragraphs=[Paragraph(text="content", index=15)])
     result = TenderAnalyzer(FakeLLMProvider(TenderChunkAnalysis())).analyze(source)
     assert isinstance(result, TenderAnalysis)
+
+
+def test_requirement_merge_handles_exact_whitespace_and_punctuation_variants() -> None:
+    merged = _merge_requirements([
+        RequirementItem(text="投标人须提供营业执照。", evidence=[EvidenceReference(paragraph_index=1)]),
+        RequirementItem(text=" 投标人 须 提供 营业执照 ", evidence=[EvidenceReference(paragraph_index=2)]),
+    ])
+    assert len(merged) == 1
+    assert [item.paragraph_index for item in merged[0].evidence] == [1, 2]
+
+
+def test_requirement_merge_removes_list_number_and_modal_format_difference() -> None:
+    merged = _merge_requirements([
+        RequirementItem(text="1. 投标人须提供营业执照", evidence=[EvidenceReference(paragraph_index=1)]),
+        RequirementItem(text="（1）投标人应当提供营业执照。", evidence=[EvidenceReference(paragraph_index=2)]),
+    ])
+    assert len(merged) == 1
+
+
+def test_requirement_merge_handles_only_very_close_wording() -> None:
+    merged = _merge_requirements([
+        RequirementItem(text="投标人须在投标文件中提供有效营业执照复印件", evidence=[EvidenceReference(paragraph_index=1)]),
+        RequirementItem(text="投标人应在投标文件中提供有效营业执照复印件。", evidence=[EvidenceReference(paragraph_index=2)]),
+    ])
+    assert len(merged) == 1
+
+
+def test_requirement_merge_does_not_merge_different_numeric_requirements() -> None:
+    merged = _merge_requirements([
+        RequirementItem(text="设备额定功率不低于100kW", evidence=[EvidenceReference(paragraph_index=1)]),
+        RequirementItem(text="设备额定功率不低于200kW", evidence=[EvidenceReference(paragraph_index=2)]),
+    ])
+    assert len(merged) == 2
+
+
+def test_requirement_merge_order_is_deterministic() -> None:
+    items = [
+        RequirementItem(text="投标人须提供营业执照。", evidence=[EvidenceReference(paragraph_index=1)]),
+        RequirementItem(text="投标人应当提供营业执照", evidence=[EvidenceReference(paragraph_index=2)]),
+        RequirementItem(text="设备额定功率不低于100kW", evidence=[EvidenceReference(paragraph_index=3)]),
+    ]
+    assert _merge_requirements(items) == _merge_requirements(items)
+    assert [item.text for item in _merge_requirements(items)] == [items[0].text, items[2].text]
+
+
+def test_scalar_formatting_difference_does_not_create_conflict() -> None:
+    result = TenderAnalyzer._merge(
+        [TenderChunkAnalysis(tenderer="Example, Ltd."), TenderChunkAnalysis(tenderer=" example ltd ")], []
+    )
+    assert result.tenderer == "Example, Ltd."
+    assert "scalar_conflict:tenderer" not in result.warnings
+
+
+def test_true_scalar_difference_still_creates_conflict() -> None:
+    result = TenderAnalyzer._merge(
+        [TenderChunkAnalysis(tenderer="First Entity"), TenderChunkAnalysis(tenderer="Second Entity")], []
+    )
+    assert "scalar_conflict:tenderer" in result.warnings
+
+
+def test_synthetic_multichunk_business_license_duplicate_is_merged() -> None:
+    source = document(paragraphs=[Paragraph(text="营业执照", index=1), Paragraph(text="营业执照", index=2)])
+    first = TenderChunkAnalysis(qualification_requirements=[
+        RequirementItem(text="投标人须提供营业执照。", evidence=[EvidenceReference(paragraph_index=1)])
+    ])
+    second = TenderChunkAnalysis(qualification_requirements=[
+        RequirementItem(text="（1）投标人应当提供营业执照", evidence=[EvidenceReference(paragraph_index=2)])
+    ])
+    chunk = build_document_chunks(source, max_chars=100, overlap_chars=0)[0]
+    result = TenderAnalyzer(SequenceProvider([first, second]), chunk_builder=lambda _value: [
+        chunk.model_copy(update={"paragraph_indices": [1]}),
+        chunk.model_copy(update={"chunk_index": 1, "paragraph_indices": [2]}),
+    ]).analyze(source)
+    assert len(result.qualification_requirements) == 1
+    assert [evidence.paragraph_index for evidence in result.qualification_requirements[0].evidence] == [1, 2]

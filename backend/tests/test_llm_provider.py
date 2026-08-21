@@ -32,7 +32,7 @@ def provider_with_response(content: str, **settings_values: Any) -> OpenAICompat
 
 
 def test_settings_defaults() -> None:
-    settings = Settings()
+    settings = Settings(_env_file=None)
     assert settings.llm_provider == "openai_compatible"
     assert settings.llm_temperature == 0.0
     assert settings.llm_max_retries == 2

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
+from difflib import SequenceMatcher
 
 from ..llm.models import LLMMessage
 from ..llm.provider import LLMProvider
@@ -12,6 +14,8 @@ from .chunking import build_document_chunks
 from .models import DocumentChunk, TenderChunkAnalysis
 
 _WHITESPACE = re.compile(r"\s+")
+_LIST_PREFIX = re.compile(r"^\s*(?:(?:[（(]\s*)?\d{1,3}\s*(?:[）).、】【、]|[-:])|[一二三四五六七八九十]+[、.])\s*")
+_NUMBER = re.compile(r"\d+(?:\.\d+)?(?:[a-zA-Z%]+)?")
 _SCALARS = ("project_name", "project_number", "tenderer", "agency", "deadline", "budget")
 _REQUIREMENT_FIELDS = (
     "qualification_requirements",
@@ -28,6 +32,34 @@ class TenderAnalyzerError(Exception):
 
 def _normalize(value: str) -> str:
     return _WHITESPACE.sub(" ", value).strip().casefold()
+
+
+def _normalize_scalar(value: str) -> str:
+    """Compare scalar formatting without changing the first observed display value."""
+    normalized = unicodedata.normalize("NFKC", value)
+    return "".join(character.casefold() for character in normalized if not character.isspace() and not unicodedata.category(character).startswith("P"))
+
+
+def _normalize_requirement(value: str) -> str:
+    """Create a conservative comparison key for numbered requirement statements."""
+    normalized = unicodedata.normalize("NFKC", value)
+    normalized = _LIST_PREFIX.sub("", normalized)
+    normalized = _WHITESPACE.sub("", normalized).casefold()
+    normalized = "".join(character for character in normalized if not unicodedata.category(character).startswith("P"))
+    return re.sub(r"应当|应", "须", normalized)
+
+
+def _requirements_are_near_duplicates(left: str, right: str) -> bool:
+    """Merge only very close wording variants, never statements with different numeric terms."""
+    left_key = _normalize_requirement(left)
+    right_key = _normalize_requirement(right)
+    if left_key == right_key:
+        return True
+    if len(left_key) < 12 or len(right_key) < 12:
+        return False
+    if _NUMBER.findall(left_key) != _NUMBER.findall(right_key):
+        return False
+    return SequenceMatcher(None, left_key, right_key).ratio() >= 0.94
 
 
 def _normalized_quote(value: str) -> str:
@@ -146,7 +178,7 @@ class TenderAnalyzer:
                     continue
                 if data[field] is None:
                     data[field] = value
-                elif data[field] != value:
+                elif _normalize_scalar(str(data[field])) != _normalize_scalar(value):
                     warnings.append(f"scalar_conflict:{field}")
         for field in _REQUIREMENT_FIELDS:
             data[field] = _merge_requirements([item for result in results for item in getattr(result, field)])
@@ -168,14 +200,17 @@ def _dedupe_evidence(evidence: list[EvidenceReference]) -> list[EvidenceReferenc
 
 
 def _merge_requirements(items: list[RequirementItem]) -> list[RequirementItem]:
-    merged: dict[str, RequirementItem] = {}
+    merged: list[RequirementItem] = []
     for item in items:
-        key = _normalize(item.text)
-        if key in merged:
-            merged[key] = merged[key].model_copy(update={"evidence": _dedupe_evidence([*merged[key].evidence, *item.evidence])})
+        for index, existing in enumerate(merged):
+            if _requirements_are_near_duplicates(existing.text, item.text):
+                merged[index] = existing.model_copy(
+                    update={"evidence": _dedupe_evidence([*existing.evidence, *item.evidence])}
+                )
+                break
         else:
-            merged[key] = item
-    return list(merged.values())
+            merged.append(item)
+    return merged
 
 
 def _merge_scoring(items: list[ScoringItem]) -> list[ScoringItem]:
