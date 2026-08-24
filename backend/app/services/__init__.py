@@ -1,3 +1,4 @@
 from .projects import ProjectNotFoundError, ProjectService
+from .project_imports import ProjectImportService, SourceRootError
 
-__all__ = ["ProjectNotFoundError", "ProjectService"]
+__all__ = ["ProjectImportService", "ProjectNotFoundError", "ProjectService", "SourceRootError"]

@@ -40,3 +40,27 @@ class ProjectFileRead(BaseModel):
     parse_error_code: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ProjectImportRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    source_root: str = Field(min_length=1, max_length=2048)
+
+
+class ProjectImportError(BaseModel):
+    relative_path: str | None = None
+    error_code: str
+
+
+class ProjectImportResult(BaseModel):
+    project_id: str
+    scanned_files: int
+    supported_files: int
+    created: int
+    updated: int
+    unchanged: int
+    ignored: int
+    unsupported: int
+    missing_existing: int
+    errors: list[ProjectImportError] = Field(default_factory=list)
