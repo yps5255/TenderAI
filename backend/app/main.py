@@ -8,6 +8,8 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from . import __version__
+from .api.projects import router as projects_router
 from .analyzer.chunking import build_document_chunks
 from .analyzer.tender_analyzer import TenderAnalyzer, TenderAnalyzerError
 from .llm.exceptions import LLMConfigurationError, LLMConnectionError, LLMError, LLMHTTPError, LLMResponseError, LLMStructuredOutputError, LLMTimeoutError
@@ -18,7 +20,8 @@ from .parser.document_parser import SUPPORTED_EXTENSIONS, parse_document
 from .parser.pdf_parser import DocumentParseError
 from .settings import Settings
 
-app = FastAPI(title="TenderAI")
+app = FastAPI(title="TenderAI", version=__version__)
+app.include_router(projects_router)
 
 MAX_UPLOAD_SIZE = 500 * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 1024 * 1024
