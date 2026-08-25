@@ -76,8 +76,19 @@ _GROUP_INSTRUCTIONS = {
         "Do not turn minimum staffing, equipment, certification, or experience requirements into bidder capability."
     ),
     "commercial_service": (
-        "Extract only the bidder own price, delivery commitment, validity period, commercial responses, and service "
-        "commitments. Do not use a price ceiling or tender-required delivery or validity terms as bidder declarations."
+        "Extract only the current bid project's own price, delivery commitment, validity period, other commercial "
+        "responses, and service commitments. A CommercialResponse means a bidder response to current-project "
+        "commercial terms such as payment, settlement, taxes, transport, or commercial deviation; it is not "
+        "historical project experience, a historical contract summary, a historical customer, certification, "
+        "qualification material, personnel, equipment, or technical content. Historical project experience is NOT "
+        "a commercial response: a past project's name, client or customer, contract amount, or completion date/year "
+        "must not be extracted as CommercialResponse. A historical contract amount such as 500万元 is not bid_price "
+        "and is not a current bid response. Only current-bid context may populate bid_price, delivery_commitment, "
+        "or validity_period; a historical completion year or certification validity is not those current-bid fields. "
+        "Certification is not a service commitment. Service commitments require an explicit current-project bidder "
+        "promise such as after-sales service, warranty, maintenance, training, support, or response time. "
+        "commercial_responses may be empty when dedicated scalar fields cover the facts. Do not use a price ceiling "
+        "or tender-required delivery or validity terms as bidder declarations."
     ),
 }
 _GROUP_SIGNALS: dict[str, tuple[str, ...]] = {

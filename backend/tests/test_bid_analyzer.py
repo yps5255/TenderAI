@@ -213,8 +213,45 @@ def test_group_prompts_are_distinct_and_share_safety_rules() -> None:
     assert "documents actually submitted" in prompts["core_documents"]
     assert "technical solution" in prompts["technical"]
     assert "experience, certifications, personnel, and equipment" in prompts["capability"]
-    assert "bidder own price" in prompts["commercial_service"]
+    assert "current bid project's own price" in prompts["commercial_service"]
     assert all("Never invent a source_ref" in prompt for prompt in prompts.values())
+
+
+def test_commercial_prompt_hardens_historical_and_current_bid_scope() -> None:
+    prompt = BidAnalyzer._messages(
+        "commercial_service", BidCommercialServiceChunkAnalysis,
+        DocumentChunk(chunk_index=0, content="synthetic"),
+    )[0].content
+    assert "Historical project experience is NOT a commercial response" in prompt
+    assert "historical contract amount" in prompt
+    assert "historical customer" in prompt
+    assert "completion date/year" in prompt
+    assert "Only current-bid context" in prompt
+    assert "Certification is not a service commitment" in prompt
+    assert "commercial_responses may be empty" in prompt
+
+
+def test_commercial_scope_fixture_does_not_expect_history_as_commercial_response() -> None:
+    source = document(
+        "投标报价：人民币280万元。投标有效期：90日。",
+        "类似业绩：A项目。客户：甲公司。合同金额500万元。完成时间2025年。",
+        "售后服务：提供24个月质保。",
+        content_order=True,
+    )
+    capability = BidCapabilityChunkAnalysis(
+        experience_items=[BidChunkExperienceItem(project_name="A项目", evidence=[source_evidence("P:2")])]
+    )
+    commercial = BidCommercialServiceChunkAnalysis(
+        bid_price="人民币280万元",
+        validity_period="90日",
+        service_commitments=[BidChunkTextItem(text="提供24个月质保", evidence=[source_evidence("P:3")])],
+        commercial_responses=[],
+    )
+    result = BidAnalyzer(ScriptedLLMProvider([capability, commercial])).analyze(source)
+    assert result.bid_price == "人民币280万元"
+    assert result.validity_period == "90日"
+    assert result.service_commitments[0].text == "提供24个月质保"
+    assert result.commercial_responses == []
 
 
 def relevance_chunk(text: str) -> DocumentChunk:
