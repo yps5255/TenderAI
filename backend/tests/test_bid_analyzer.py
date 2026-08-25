@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from backend.app.analyzer.chunking import build_document_chunks
 from backend.app.analyzer.models import DocumentChunk
 from backend.app.bid_analyzer import BidAnalyzer, BidAnalyzerError
 from backend.app.bid_analyzer.models import (
     BidAnalysis,
+    BidCapabilityChunkAnalysis,
     BidChunkAnalysis,
     BidChunkCommercialResponse,
     BidChunkDeviationItem,
@@ -22,6 +21,9 @@ from backend.app.bid_analyzer.models import (
     BidChunkCertificationItem,
     BidChunkPersonnelItem,
     BidSourceEvidence,
+    BidCommercialServiceChunkAnalysis,
+    BidCoreDocumentsChunkAnalysis,
+    BidTechnicalChunkAnalysis,
     BidTextItem,
     CertificationItem,
     CommercialResponse,
@@ -66,43 +68,57 @@ def one_paragraph_chunks(source: ParsedDocument) -> list[DocumentChunk]:
     ]
 
 
-class SequenceFakeLLMProvider(FakeLLMProvider):
-    def __init__(self, responses: Sequence[BidChunkAnalysis | Exception]) -> None:
-        super().__init__(BidChunkAnalysis())
-        self.responses = list(responses)
+class ScriptedLLMProvider:
+    def __init__(self, responses: list[BaseModel | Exception] | None = None) -> None:
+        self.responses = list(responses or [])
+        self.calls: list[tuple[type[BaseModel], object]] = []
 
     def generate(self, messages, response_model):
-        self.received_messages.append(messages)
+        self.calls.append((response_model, messages))
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
         return response_model.model_validate(response.model_dump())
 
 
-def analyze_responses(source: ParsedDocument, *responses: BidChunkAnalysis) -> object:
-    return BidAnalyzer(SequenceFakeLLMProvider(responses), chunk_builder=one_paragraph_chunks).analyze(source)
+def empty_groups() -> list[BaseModel]:
+    return [
+        BidCoreDocumentsChunkAnalysis(),
+        BidTechnicalChunkAnalysis(),
+        BidCapabilityChunkAnalysis(),
+        BidCommercialServiceChunkAnalysis(),
+    ]
 
 
 def test_empty_document_does_not_call_provider() -> None:
-    provider = FakeLLMProvider(BidChunkAnalysis())
+    provider = ScriptedLLMProvider([])
     assert BidAnalyzer(provider).analyze(document()).warnings == ["document_has_no_extractable_content"]
-    assert provider.received_messages == []
+    assert provider.calls == []
 
 
 def test_single_chunk_bid_analysis() -> None:
     source = document("Bidder: Example", content_order=True)
-    result = BidAnalyzer(FakeLLMProvider(BidChunkAnalysis(bidder="Example"))).analyze(source)
+    responses = empty_groups()
+    responses[0] = BidCoreDocumentsChunkAnalysis(bidder="Example")
+    provider = ScriptedLLMProvider(responses)
+    result = BidAnalyzer(provider).analyze(source)
     assert result.bidder == "Example"
     assert result.warnings == []
+    assert [model.__name__ for model, _ in provider.calls] == [
+        "BidCoreDocumentsChunkAnalysis",
+        "BidTechnicalChunkAnalysis",
+        "BidCapabilityChunkAnalysis",
+        "BidCommercialServiceChunkAnalysis",
+    ]
 
 
 def test_prompt_requires_bid_facts_and_valid_evidence() -> None:
-    source = document("Bidder commits to delivery", content_order=True)
-    provider = FakeLLMProvider(BidChunkAnalysis())
-    BidAnalyzer(provider).analyze(source)
-    system = provider.received_messages[0][0].content
-    assert "actually provided, declared, committed" in system
-    assert "template instructions" in system
+    system = BidAnalyzer._messages(
+        "technical", BidTechnicalChunkAnalysis, DocumentChunk(chunk_index=0, content="synthetic")
+    )[0].content
+    assert "bidder actual technical responses" in system
+    assert "bidder states 120kW" in system
+    assert "not 100kW" in system
     assert "source_ref copied from the chunk locator" in system
     assert "satisfaction" in system
 
@@ -117,38 +133,105 @@ def test_prompt_requires_bid_facts_and_valid_evidence() -> None:
     ],
 )
 def test_prompt_has_explicit_source_reference_rule(expected_rule: str) -> None:
-    system = BidAnalyzer._messages(DocumentChunk(chunk_index=0, content="synthetic"))[0].content
+    system = BidAnalyzer._messages(
+        "technical", BidTechnicalChunkAnalysis, DocumentChunk(chunk_index=0, content="synthetic")
+    )[0].content
     assert expected_rule in system
+
+
+@pytest.mark.parametrize(
+    ("model", "fields"),
+    [
+        (BidCoreDocumentsChunkAnalysis, {"project_name", "project_number", "bidder", "qualification_materials", "submitted_documents", "warnings"}),
+        (BidTechnicalChunkAnalysis, {"technical_responses", "deviation_items", "technical_solution", "warnings"}),
+        (BidCapabilityChunkAnalysis, {"experience_items", "certifications", "personnel", "equipment", "warnings"}),
+        (BidCommercialServiceChunkAnalysis, {"bid_price", "delivery_commitment", "validity_period", "commercial_responses", "service_commitments", "warnings"}),
+    ],
+)
+def test_group_schema_is_narrow_and_forbids_extra(model: type[BaseModel], fields: set[str]) -> None:
+    assert set(model.model_fields) == fields
+    assert model.model_config["extra"] == "forbid"
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        model.model_validate({"unrelated": "value"})
+
+
+def test_group_prompts_are_distinct_and_share_safety_rules() -> None:
+    prompts = {
+        group: BidAnalyzer._messages(group, model, DocumentChunk(chunk_index=0, content="synthetic"))[0].content
+        for group, model in [
+            ("core_documents", BidCoreDocumentsChunkAnalysis),
+            ("technical", BidTechnicalChunkAnalysis),
+            ("capability", BidCapabilityChunkAnalysis),
+            ("commercial_service", BidCommercialServiceChunkAnalysis),
+        ]
+    }
+    assert len(set(prompts.values())) == 4
+    assert "documents actually submitted" in prompts["core_documents"]
+    assert "technical solution" in prompts["technical"]
+    assert "experience, certifications, personnel, and equipment" in prompts["capability"]
+    assert "bidder own price" in prompts["commercial_service"]
+    assert all("Never invent a source_ref" in prompt for prompt in prompts.values())
 
 
 def test_three_chunk_synthetic_merge() -> None:
     source = document("License and permit", "Technical response and deviation", "Price and service")
-    first = BidChunkAnalysis(
+    first = BidCoreDocumentsChunkAnalysis(
         project_name="Synthetic Project",
         project_number="SYN-1",
         bidder="Example Bidder",
         qualification_materials=[BidChunkQualificationMaterial(name="Business license", evidence=[source_evidence("P:1")])],
         submitted_documents=[BidChunkSubmittedDocument(name="Permit", evidence=[source_evidence("P:1")])],
     )
-    second = BidChunkAnalysis(
-        technical_responses=[BidChunkTechnicalResponse(response="Parameter accepted", evidence=[source_evidence("P:2")])],
+    second_technical = BidTechnicalChunkAnalysis(
+        technical_responses=[BidChunkTechnicalResponse(
+            response="Rated power 120kW", declared_status="stated_compliant", evidence=[source_evidence("P:2")]
+        )],
         deviation_items=[BidChunkDeviationItem(description="No deviation", deviation_type="none", evidence=[source_evidence("P:2")])],
         technical_solution=[BidChunkTextItem(text="Synthetic solution", evidence=[source_evidence("P:2")])],
+    )
+    second_capability = BidCapabilityChunkAnalysis(
         personnel=[BidChunkPersonnelItem(role="Engineer", description="Two people", evidence=[source_evidence("P:2")])],
         equipment=[BidChunkEquipmentItem(name="Crane", quantity="2", evidence=[source_evidence("P:2")])],
     )
-    third = BidChunkAnalysis(
+    third_capability = BidCapabilityChunkAnalysis(
+        experience_items=[BidChunkExperienceItem(project_name="Prior work", evidence=[source_evidence("P:3")])],
+        certifications=[BidChunkCertificationItem(name="ISO", evidence=[source_evidence("P:3")])],
+    )
+    third_commercial = BidCommercialServiceChunkAnalysis(
         bid_price="CNY 100",
         delivery_commitment="30 days",
         validity_period="90 days",
         commercial_responses=[BidChunkCommercialResponse(response="Payment accepted", evidence=[source_evidence("P:3")])],
-        experience_items=[BidChunkExperienceItem(project_name="Prior work", evidence=[source_evidence("P:3")])],
-        certifications=[BidChunkCertificationItem(name="ISO", evidence=[source_evidence("P:3")])],
         service_commitments=[BidChunkTextItem(text="24-hour support", evidence=[source_evidence("P:3")])],
     )
-    result = analyze_responses(source, first, second, third)
+    responses = [first, *empty_groups()[1:], empty_groups()[0], second_technical, second_capability,
+                 empty_groups()[3], empty_groups()[0], empty_groups()[1], third_capability, third_commercial]
+    provider = ScriptedLLMProvider(responses)
+    result = BidAnalyzer(provider, chunk_builder=one_paragraph_chunks).analyze(source)
     assert (result.project_name, result.bid_price, result.delivery_commitment) == ("Synthetic Project", "CNY 100", "30 days")
-    assert len(result.qualification_materials) == len(result.technical_responses) == len(result.service_commitments) == 1
+    assert (result.project_number, result.bidder, result.validity_period) == ("SYN-1", "Example Bidder", "90 days")
+    for field in (
+        "qualification_materials", "submitted_documents", "technical_responses", "deviation_items",
+        "technical_solution", "personnel", "equipment", "experience_items", "certifications",
+        "commercial_responses", "service_commitments",
+    ):
+        assert len(getattr(result, field)) == 1
+    assert result.technical_responses[0].response == "Rated power 120kW"
+    assert result.technical_responses[0].declared_status == DeclaredResponseStatus.STATED_COMPLIANT
+    assert result.deviation_items[0].deviation_type == DeviationType.NONE
+    assert "100kW" not in result.technical_responses[0].response
+    assert all(item.evidence[0].paragraph_index in {1, 2, 3} for field in (
+        "qualification_materials", "submitted_documents", "technical_responses", "deviation_items",
+        "technical_solution", "personnel", "equipment", "experience_items", "certifications",
+        "commercial_responses", "service_commitments",
+    ) for item in getattr(result, field))
+    assert len(provider.calls) == 12
+    assert [model.__name__ for model, _ in provider.calls] == [
+        name for _ in range(3) for name in (
+            "BidCoreDocumentsChunkAnalysis", "BidTechnicalChunkAnalysis",
+            "BidCapabilityChunkAnalysis", "BidCommercialServiceChunkAnalysis",
+        )
+    ]
 
 
 def test_scalar_first_non_null_wins() -> None:
@@ -358,10 +441,10 @@ def test_invalid_source_ref_with_plausible_quote_is_rejected() -> None:
 
 def test_item_with_all_source_refs_invalid_is_dropped() -> None:
     source = document("Business license", content_order=True)
-    response = BidChunkAnalysis(qualification_materials=[
+    response = BidCoreDocumentsChunkAnalysis(qualification_materials=[
         BidChunkQualificationMaterial(name="License", evidence=[source_evidence("P:999", "Business license")])
     ])
-    result = BidAnalyzer(FakeLLMProvider(response)).analyze(source)
+    result = BidAnalyzer(ScriptedLLMProvider([response, *empty_groups()[1:]])).analyze(source)
     assert result.qualification_materials == []
     assert result.warnings == ["item_without_valid_evidence_dropped:qualification_materials"]
 
@@ -384,26 +467,46 @@ def test_chunk_schema_uses_source_ref_without_domain_locator_fields() -> None:
 
 def test_final_bid_analysis_still_uses_evidence_reference() -> None:
     source = document("Business license", content_order=True)
-    response = BidChunkAnalysis(qualification_materials=[
+    response = BidCoreDocumentsChunkAnalysis(qualification_materials=[
         BidChunkQualificationMaterial(name="License", evidence=[source_evidence("P:1", "Business license")])
     ])
-    item = BidAnalyzer(FakeLLMProvider(response)).analyze(source).qualification_materials[0]
+    item = BidAnalyzer(ScriptedLLMProvider([response, *empty_groups()[1:]])).analyze(source).qualification_materials[0]
     assert type(item.evidence[0]) is EvidenceReference
     assert item.evidence[0].paragraph_index == 1
 
 
-def test_one_chunk_failure_continues() -> None:
-    source = document("first", "second")
-    provider = SequenceFakeLLMProvider([LLMConnectionError("synthetic"), BidChunkAnalysis(bidder="Survives")])
-    result = BidAnalyzer(provider, chunk_builder=one_paragraph_chunks).analyze(source)
+def test_one_group_failure_continues_without_chunk_failure() -> None:
+    provider = ScriptedLLMProvider([LLMConnectionError("provider raw detail"), *empty_groups()[1:]])
+    result = BidAnalyzer(provider).analyze(document("first", content_order=True))
+    assert result.warnings == ["group_analysis_failed:core_documents:0"]
+    assert "provider raw detail" not in str(result.warnings)
+
+
+def test_all_groups_in_one_chunk_add_chunk_failure_warning() -> None:
+    failures = [LLMConnectionError("synthetic") for _ in range(4)]
+    responses = [*failures, BidCoreDocumentsChunkAnalysis(bidder="Survives"), *empty_groups()[1:]]
+    result = BidAnalyzer(ScriptedLLMProvider(responses), chunk_builder=one_paragraph_chunks).analyze(
+        document("first", "second")
+    )
     assert result.bidder == "Survives"
-    assert "chunk_analysis_failed:0" in result.warnings
+    assert result.warnings[1:6] == [
+        "group_analysis_failed:core_documents:0",
+        "group_analysis_failed:technical:0",
+        "group_analysis_failed:capability:0",
+        "group_analysis_failed:commercial_service:0",
+        "chunk_analysis_failed:0",
+    ]
 
 
 def test_all_chunks_failure_raises() -> None:
     source = document("only")
     with pytest.raises(BidAnalyzerError, match="All document chunks failed"):
-        BidAnalyzer(SequenceFakeLLMProvider([LLMConnectionError("synthetic")])).analyze(source)
+        BidAnalyzer(ScriptedLLMProvider([LLMConnectionError("synthetic") for _ in range(4)])).analyze(source)
+
+
+def test_legal_empty_group_results_are_successful() -> None:
+    result = BidAnalyzer(ScriptedLLMProvider(empty_groups())).analyze(document("none", content_order=True))
+    assert result.warnings == []
 
 
 def test_warnings_are_deterministic_and_deduplicated() -> None:
@@ -427,7 +530,7 @@ def test_merge_order_is_deterministic() -> None:
 
 
 def test_source_order_warning_when_content_order_unavailable() -> None:
-    result = BidAnalyzer(FakeLLMProvider(BidChunkAnalysis())).analyze(document("content"))
+    result = BidAnalyzer(ScriptedLLMProvider(empty_groups())).analyze(document("content"))
     assert result.warnings == ["source_order_unavailable"]
 
 
@@ -441,4 +544,4 @@ def test_content_order_chunking_compatibility() -> None:
     )
     chunk = build_document_chunks(source, max_chars=100, overlap_chars=0)[0]
     assert chunk.content.index("[T:2") < chunk.content.index("[P:1")
-    assert BidAnalyzer(FakeLLMProvider(BidChunkAnalysis())).analyze(source).warnings == []
+    assert BidAnalyzer(ScriptedLLMProvider(empty_groups())).analyze(source).warnings == []

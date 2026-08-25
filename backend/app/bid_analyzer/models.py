@@ -178,8 +178,41 @@ class BidChunkEquipmentItem(EquipmentItem):
     evidence: list[BidSourceEvidence] = Field(default_factory=list)
 
 
+class BidCoreDocumentsChunkAnalysis(BidAnalysisModel):
+    project_name: str | None = None
+    project_number: str | None = None
+    bidder: str | None = None
+    qualification_materials: list[BidChunkQualificationMaterial] = Field(default_factory=list)
+    submitted_documents: list[BidChunkSubmittedDocument] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BidTechnicalChunkAnalysis(BidAnalysisModel):
+    technical_responses: list[BidChunkTechnicalResponse] = Field(default_factory=list)
+    deviation_items: list[BidChunkDeviationItem] = Field(default_factory=list)
+    technical_solution: list[BidChunkTextItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BidCapabilityChunkAnalysis(BidAnalysisModel):
+    experience_items: list[BidChunkExperienceItem] = Field(default_factory=list)
+    certifications: list[BidChunkCertificationItem] = Field(default_factory=list)
+    personnel: list[BidChunkPersonnelItem] = Field(default_factory=list)
+    equipment: list[BidChunkEquipmentItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BidCommercialServiceChunkAnalysis(BidAnalysisModel):
+    bid_price: str | None = None
+    delivery_commitment: str | None = None
+    validity_period: str | None = None
+    commercial_responses: list[BidChunkCommercialResponse] = Field(default_factory=list)
+    service_commitments: list[BidChunkTextItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class BidChunkAnalysis(BidAnalysisModel):
-    """Structured extraction result for one document chunk."""
+    """Full internal aggregation shape; production extraction uses grouped models."""
 
     project_name: str | None = None
     project_number: str | None = None

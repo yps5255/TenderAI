@@ -17,8 +17,11 @@ from ..llm.provider import LLMProvider
 from ..models import EvidenceReference, ParsedDocument
 from .models import (
     BidAnalysis,
-    BidChunkAnalysis,
+    BidCapabilityChunkAnalysis,
+    BidCommercialServiceChunkAnalysis,
+    BidCoreDocumentsChunkAnalysis,
     BidSourceEvidence,
+    BidTechnicalChunkAnalysis,
     BidTextItem,
     CertificationItem,
     CommercialResponse,
@@ -49,6 +52,33 @@ _COLLECTIONS = (
     "technical_solution",
     "service_commitments",
 )
+_GROUPS: tuple[tuple[str, type[BaseModel], tuple[str, ...]], ...] = (
+    ("core_documents", BidCoreDocumentsChunkAnalysis, ("qualification_materials", "submitted_documents")),
+    ("technical", BidTechnicalChunkAnalysis, ("technical_responses", "deviation_items", "technical_solution")),
+    ("capability", BidCapabilityChunkAnalysis, ("experience_items", "certifications", "personnel", "equipment")),
+    ("commercial_service", BidCommercialServiceChunkAnalysis, ("commercial_responses", "service_commitments")),
+)
+_GROUP_INSTRUCTIONS = {
+    "core_documents": (
+        "Extract only project identity, bidder identity, qualification materials actually provided by the bidder, "
+        "and documents actually submitted. A tender requirement to provide a document is not evidence that the "
+        "bidder submitted it."
+    ),
+    "technical": (
+        "Extract only the bidder actual technical responses, explicit deviation statements, and technical solution. "
+        "If a tender minimum is 100kW and the bidder states 120kW, extract the bidder response 120kW, not 100kW. "
+        "declared_status and deviation_type must reflect only explicit bidder statements; no-deviation is not your "
+        "compliance judgment."
+    ),
+    "capability": (
+        "Extract only experience, certifications, personnel, and equipment explicitly claimed by the bidder. "
+        "Do not turn minimum staffing, equipment, certification, or experience requirements into bidder capability."
+    ),
+    "commercial_service": (
+        "Extract only the bidder own price, delivery commitment, validity period, commercial responses, and service "
+        "commitments. Do not use a price ceiling or tender-required delivery or validity terms as bidder declarations."
+    ),
+}
 
 ItemT = TypeVar("ItemT", bound=BaseModel)
 
@@ -143,8 +173,8 @@ class BidAnalyzer:
         self.chunk_builder = chunk_builder
 
     @staticmethod
-    def _messages(chunk: DocumentChunk) -> list[LLMMessage]:
-        schema = BidChunkAnalysis.model_json_schema()
+    def _messages(group_id: str, response_model: type[BaseModel], chunk: DocumentChunk) -> list[LLMMessage]:
+        schema = response_model.model_json_schema()
         system = (
             "Extract only facts explicitly supported by the current bid-document chunk. Never infer or complete "
             "missing information. Return structured JSON only; absent scalars must be null and absent collections "
@@ -152,15 +182,13 @@ class BidAnalyzer:
             "a source_ref copied from the chunk locator. For [P:7 PAGE:null], return source_ref P:7. For "
             "[T:3 PAGE:5], return source_ref T:3. Never invent a source_ref. If no source_ref can be identified, do "
             "not emit the item. The quote must come from the same source_ref. Do not return page_number, "
-            "paragraph_index, or table_index; TenderAI derives them from source_ref. Distinguish tender requirements "
-            "quoted in the bid from what the "
-            "bidder actually provided, declared, committed to, or responded with. Do not treat template instructions "
-            "as bidder commitments. declared_status is allowed only when explicitly stated by the bidder. "
-            "deviation_type is allowed only for an explicit deviation table or declaration. Never perform tender-bid "
-            "alignment, satisfaction, qualification, scoring, award, or rejection-risk judgments."
+            "paragraph_index, or table_index; TenderAI derives them from source_ref. Never perform tender-bid "
+            "satisfaction or alignment judgment, scoring, award prediction, or rejection-risk judgment. "
+            f"{_GROUP_INSTRUCTIONS[group_id]}"
         )
         user = (
-            "Extract this bid chunk using its global locators. Return JSON matching this schema exactly:\n"
+            f"Extract group {group_id} from this bid chunk using its global locators. "
+            "Return JSON matching this schema exactly:\n"
             f"{schema}\n\nCHUNK {chunk.chunk_index}:\n{chunk.content}"
         )
         return [LLMMessage(role="system", content=system), LLMMessage(role="user", content=user)]
@@ -208,11 +236,16 @@ class BidAnalyzer:
             ))
         return _dedupe_evidence(valid)
 
-    def _validate_chunk_result(
-        self, result: BidChunkAnalysis, chunk: DocumentChunk, document: ParsedDocument, warnings: list[str]
+    def _validate_group_result(
+        self,
+        result: BaseModel,
+        collection_fields: tuple[str, ...],
+        chunk: DocumentChunk,
+        document: ParsedDocument,
+        warnings: list[str],
     ) -> BidAnalysis:
-        data = result.model_dump(exclude=set(_COLLECTIONS))
-        for field in _COLLECTIONS:
+        data = result.model_dump(exclude=set(collection_fields))
+        for field in collection_fields:
             validated_items = []
             for item in getattr(result, field):
                 item_data = item.model_dump(exclude={"evidence"})
@@ -233,11 +266,20 @@ class BidAnalyzer:
         results: list[BidAnalysis] = []
         last_error: Exception | None = None
         for chunk in chunks:
-            try:
-                result = self.provider.generate(self._messages(chunk), BidChunkAnalysis)
-                results.append(self._validate_chunk_result(result, chunk, document, warnings))
-            except Exception as exc:
-                last_error = exc
+            failed_groups = 0
+            for group_id, response_model, collection_fields in _GROUPS:
+                try:
+                    result = self.provider.generate(
+                        self._messages(group_id, response_model, chunk), response_model
+                    )
+                    results.append(
+                        self._validate_group_result(result, collection_fields, chunk, document, warnings)
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    failed_groups += 1
+                    warnings.append(f"group_analysis_failed:{group_id}:{chunk.chunk_index}")
+            if failed_groups == len(_GROUPS):
                 warnings.append(f"chunk_analysis_failed:{chunk.chunk_index}")
         if not results:
             raise BidAnalyzerError("All document chunks failed analysis.") from last_error
