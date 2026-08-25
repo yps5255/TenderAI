@@ -1,7 +1,10 @@
-"""Bid document domain models and future analysis services."""
+"""Bid document domain models and analysis services."""
+
+from .bid_analyzer import BidAnalyzer, BidAnalyzerError
 
 from .models import (
     BidAnalysis,
+    BidChunkAnalysis,
     BidTextItem,
     CertificationItem,
     CommercialResponse,
@@ -17,7 +20,10 @@ from .models import (
 )
 
 __all__ = [
+    "BidAnalyzer",
+    "BidAnalyzerError",
     "BidAnalysis",
+    "BidChunkAnalysis",
     "BidTextItem",
     "CertificationItem",
     "CommercialResponse",

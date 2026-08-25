@@ -129,3 +129,26 @@ class BidAnalysis(BidAnalysisModel):
     technical_solution: list[BidTextItem] = Field(default_factory=list)
     service_commitments: list[BidTextItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class BidChunkAnalysis(BidAnalysisModel):
+    """Structured extraction result for one document chunk."""
+
+    project_name: str | None = None
+    project_number: str | None = None
+    bidder: str | None = None
+    bid_price: str | None = None
+    delivery_commitment: str | None = None
+    validity_period: str | None = None
+    qualification_materials: list[QualificationMaterial] = Field(default_factory=list)
+    technical_responses: list[TechnicalResponse] = Field(default_factory=list)
+    commercial_responses: list[CommercialResponse] = Field(default_factory=list)
+    deviation_items: list[DeviationItem] = Field(default_factory=list)
+    submitted_documents: list[SubmittedDocument] = Field(default_factory=list)
+    experience_items: list[ExperienceItem] = Field(default_factory=list)
+    certifications: list[CertificationItem] = Field(default_factory=list)
+    personnel: list[PersonnelItem] = Field(default_factory=list)
+    equipment: list[EquipmentItem] = Field(default_factory=list)
+    technical_solution: list[BidTextItem] = Field(default_factory=list)
+    service_commitments: list[BidTextItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
