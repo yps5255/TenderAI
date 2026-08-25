@@ -12,10 +12,12 @@ from . import __version__
 from .api.projects import router as projects_router
 from .analyzer.chunking import build_document_chunks
 from .analyzer.tender_analyzer import TenderAnalyzer, TenderAnalyzerError
+from .bid_analyzer import BidAnalyzer, BidAnalyzerError
 from .llm.exceptions import LLMConfigurationError, LLMConnectionError, LLMError, LLMHTTPError, LLMResponseError, LLMStructuredOutputError, LLMTimeoutError
 from .llm.factory import create_llm_provider
 from .llm.provider import LLMProvider
 from .models import ParsedDocument, TenderAnalysis
+from .bid_analyzer.models import BidAnalysis
 from .parser.document_parser import SUPPORTED_EXTENSIONS, parse_document
 from .parser.pdf_parser import DocumentParseError
 from .settings import Settings
@@ -88,6 +90,18 @@ def _analyze_parsed_document(document: ParsedDocument, provider: LLMProvider, se
     return analyzer.analyze(document)
 
 
+def _analyze_parsed_bid_document(document: ParsedDocument, provider: LLMProvider, settings: Settings) -> BidAnalysis:
+    analyzer = BidAnalyzer(
+        provider,
+        chunk_builder=lambda value: build_document_chunks(
+            value,
+            max_chars=settings.analysis_chunk_max_chars,
+            overlap_chars=settings.analysis_chunk_overlap_chars,
+        ),
+    )
+    return analyzer.analyze(document)
+
+
 def _provider_http_exception(error: Exception) -> HTTPException:
     if isinstance(error, LLMConfigurationError):
         return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM provider configuration is unavailable.")
@@ -102,6 +116,11 @@ def _provider_http_exception(error: Exception) -> HTTPException:
         if isinstance(cause, Exception) and isinstance(cause, LLMError):
             return _provider_http_exception(cause)
         return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Tender analysis failed.")
+    if isinstance(error, BidAnalyzerError):
+        cause = error.__cause__
+        if isinstance(cause, Exception) and isinstance(cause, LLMError):
+            return _provider_http_exception(cause)
+        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Bid analysis failed.")
     return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Tender analysis failed.")
 
 
@@ -148,6 +167,33 @@ async def analyze_uploaded_tender(
             try:
                 return await run_in_threadpool(_analyze_parsed_document, document, provider, settings)
             except (LLMError, TenderAnalyzerError) as exc:
+                raise _provider_http_exception(exc) from exc
+    finally:
+        await file.close()
+
+
+@app.post("/api/v1/bids/analyze", response_model=BidAnalysis)
+async def analyze_uploaded_bid(
+    file: UploadFile = File(...),
+    settings: Annotated[Settings, Depends(get_settings)] = None,
+    provider: Annotated[LLMProvider, Depends(get_llm_provider)] = None,
+) -> BidAnalysis:
+    """Statelessly parse and analyze one uploaded bid document."""
+    assert settings is not None
+    assert provider is not None
+    try:
+        with TemporaryDirectory(prefix="tenderai-") as directory:
+            destination, filename = await stream_supported_upload_to_temp(file, Path(directory))
+            try:
+                document = await run_in_threadpool(parse_document, destination, filename)
+            except DocumentParseError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Document could not be parsed.",
+                ) from exc
+            try:
+                return await run_in_threadpool(_analyze_parsed_bid_document, document, provider, settings)
+            except (LLMError, BidAnalyzerError) as exc:
                 raise _provider_http_exception(exc) from exc
     finally:
         await file.close()
