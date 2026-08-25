@@ -18,6 +18,7 @@ from ..models import EvidenceReference, ParsedDocument
 from .models import (
     BidAnalysis,
     BidChunkAnalysis,
+    BidSourceEvidence,
     BidTextItem,
     CertificationItem,
     CommercialResponse,
@@ -33,6 +34,7 @@ from .models import (
 _WHITESPACE = re.compile(r"\s+")
 _LIST_PREFIX = re.compile(r"^\s*(?:(?:[（(]\s*)?\d{1,3}\s*(?:[）).】【、】【\u3001]|[-:])|[一二三四五六七八九十]+[、.])\s*")
 _NUMBER = re.compile(r"\d+(?:\.\d+)?(?:[a-zA-Z%]+)?")
+_SOURCE_REF = re.compile(r"([PT]):(0|[1-9]\d*)")
 _SCALARS = ("project_name", "project_number", "bidder", "bid_price", "delivery_commitment", "validity_period")
 _COLLECTIONS = (
     "qualification_materials",
@@ -146,8 +148,12 @@ class BidAnalyzer:
         system = (
             "Extract only facts explicitly supported by the current bid-document chunk. Never infer or complete "
             "missing information. Return structured JSON only; absent scalars must be null and absent collections "
-            "must be []. Evidence must cite a [P:n PAGE:x] or [T:n PAGE:x] locator present in this chunk, and quotes "
-            "must be copied from the cited source. Distinguish tender requirements quoted in the bid from what the "
+            "must be []. EVIDENCE SOURCE REFERENCE RULES: Every emitted collection item must contain evidence with "
+            "a source_ref copied from the chunk locator. For [P:7 PAGE:null], return source_ref P:7. For "
+            "[T:3 PAGE:5], return source_ref T:3. Never invent a source_ref. If no source_ref can be identified, do "
+            "not emit the item. The quote must come from the same source_ref. Do not return page_number, "
+            "paragraph_index, or table_index; TenderAI derives them from source_ref. Distinguish tender requirements "
+            "quoted in the bid from what the "
             "bidder actually provided, declared, committed to, or responded with. Do not treat template instructions "
             "as bidder commitments. declared_status is allowed only when explicitly stated by the bidder. "
             "deviation_type is allowed only for an explicit deviation table or declaration. Never perform tender-bid "
@@ -170,55 +176,53 @@ class BidAnalyzer:
         }
         return paragraphs, tables
 
-    def _validate_evidence(
-        self, evidence: list[EvidenceReference], chunk: DocumentChunk, document: ParsedDocument
+    def _resolve_evidence(
+        self, evidence: list[BidSourceEvidence], chunk: DocumentChunk, document: ParsedDocument
     ) -> list[EvidenceReference]:
         paragraphs, tables = self._source_text(document)
         valid: list[EvidenceReference] = []
         for reference in evidence:
-            sources: list[tuple[str, int | None]] = []
-            if reference.paragraph_index is not None:
-                if reference.paragraph_index not in chunk.paragraph_indices:
-                    continue
-                source = paragraphs.get(reference.paragraph_index)
-                if source is None:
-                    continue
-                sources.append(source)
-            if reference.table_index is not None:
-                if reference.table_index not in chunk.table_indices:
-                    continue
-                source = tables.get(reference.table_index)
-                if source is None:
-                    continue
-                sources.append(source)
-            if not sources:
+            match = _SOURCE_REF.fullmatch(reference.source_ref)
+            if match is None:
                 continue
-            if reference.page_number is not None and any(page != reference.page_number for _, page in sources):
-                continue
+            locator_type, raw_index = match.groups()
+            index = int(raw_index)
+            if locator_type == "P":
+                if index not in chunk.paragraph_indices or index not in paragraphs:
+                    continue
+                source_text, page_number = paragraphs[index]
+                paragraph_index, table_index = index, None
+            else:
+                if index not in chunk.table_indices or index not in tables:
+                    continue
+                source_text, page_number = tables[index]
+                paragraph_index, table_index = None, index
             quote = reference.quote
-            if quote is not None and not any(
-                _normalized_quote(quote) in _normalized_quote(text) for text, _ in sources
-            ):
+            if quote is not None and _normalized_quote(quote) not in _normalized_quote(source_text):
                 quote = None
-            valid.append(reference.model_copy(update={"quote": quote}))
+            valid.append(EvidenceReference(
+                page_number=page_number,
+                paragraph_index=paragraph_index,
+                table_index=table_index,
+                quote=quote,
+            ))
         return _dedupe_evidence(valid)
 
     def _validate_chunk_result(
         self, result: BidChunkAnalysis, chunk: DocumentChunk, document: ParsedDocument, warnings: list[str]
-    ) -> BidChunkAnalysis:
-        data = result.model_dump()
+    ) -> BidAnalysis:
+        data = result.model_dump(exclude=set(_COLLECTIONS))
         for field in _COLLECTIONS:
             validated_items = []
-            for item in data[field]:
-                item["evidence"] = self._validate_evidence(
-                    [EvidenceReference.model_validate(reference) for reference in item["evidence"]], chunk, document
-                )
-                if item["evidence"]:
-                    validated_items.append(item)
+            for item in getattr(result, field):
+                item_data = item.model_dump(exclude={"evidence"})
+                item_data["evidence"] = self._resolve_evidence(item.evidence, chunk, document)
+                if item_data["evidence"]:
+                    validated_items.append(item_data)
                 else:
                     warnings.append(f"item_without_valid_evidence_dropped:{field}")
             data[field] = validated_items
-        return BidChunkAnalysis.model_validate(data)
+        return BidAnalysis.model_validate(data)
 
     def analyze(self, document: ParsedDocument) -> BidAnalysis:
         chunks = self.chunk_builder(document)
@@ -226,7 +230,7 @@ class BidAnalyzer:
             return BidAnalysis(warnings=["document_has_no_extractable_content"])
 
         warnings: list[str] = [] if document.content_order else ["source_order_unavailable"]
-        results: list[BidChunkAnalysis] = []
+        results: list[BidAnalysis] = []
         last_error: Exception | None = None
         for chunk in chunks:
             try:
@@ -240,7 +244,7 @@ class BidAnalyzer:
         return self._merge(results, warnings)
 
     @staticmethod
-    def _merge(results: list[BidChunkAnalysis], warnings: list[str]) -> BidAnalysis:
+    def _merge(results: list[BidAnalysis], warnings: list[str]) -> BidAnalysis:
         data: dict[str, object] = {field: None for field in _SCALARS}
         for result in results:
             for field in _SCALARS:

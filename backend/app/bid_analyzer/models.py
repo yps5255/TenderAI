@@ -131,6 +131,53 @@ class BidAnalysis(BidAnalysisModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class BidSourceEvidence(BidAnalysisModel):
+    """LLM-facing evidence identity resolved by TenderAI after extraction."""
+
+    source_ref: RequiredText
+    quote: str | None = None
+
+
+class BidChunkTextItem(BidTextItem):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
+class BidChunkQualificationMaterial(QualificationMaterial):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
+class BidChunkTechnicalResponse(TechnicalResponse):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
+class BidChunkCommercialResponse(CommercialResponse):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
+class BidChunkDeviationItem(DeviationItem):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
+class BidChunkSubmittedDocument(SubmittedDocument):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
+class BidChunkExperienceItem(ExperienceItem):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
+class BidChunkCertificationItem(CertificationItem):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
+class BidChunkPersonnelItem(PersonnelItem):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
+class BidChunkEquipmentItem(EquipmentItem):
+    evidence: list[BidSourceEvidence] = Field(default_factory=list)
+
+
 class BidChunkAnalysis(BidAnalysisModel):
     """Structured extraction result for one document chunk."""
 
@@ -140,15 +187,15 @@ class BidChunkAnalysis(BidAnalysisModel):
     bid_price: str | None = None
     delivery_commitment: str | None = None
     validity_period: str | None = None
-    qualification_materials: list[QualificationMaterial] = Field(default_factory=list)
-    technical_responses: list[TechnicalResponse] = Field(default_factory=list)
-    commercial_responses: list[CommercialResponse] = Field(default_factory=list)
-    deviation_items: list[DeviationItem] = Field(default_factory=list)
-    submitted_documents: list[SubmittedDocument] = Field(default_factory=list)
-    experience_items: list[ExperienceItem] = Field(default_factory=list)
-    certifications: list[CertificationItem] = Field(default_factory=list)
-    personnel: list[PersonnelItem] = Field(default_factory=list)
-    equipment: list[EquipmentItem] = Field(default_factory=list)
-    technical_solution: list[BidTextItem] = Field(default_factory=list)
-    service_commitments: list[BidTextItem] = Field(default_factory=list)
+    qualification_materials: list[BidChunkQualificationMaterial] = Field(default_factory=list)
+    technical_responses: list[BidChunkTechnicalResponse] = Field(default_factory=list)
+    commercial_responses: list[BidChunkCommercialResponse] = Field(default_factory=list)
+    deviation_items: list[BidChunkDeviationItem] = Field(default_factory=list)
+    submitted_documents: list[BidChunkSubmittedDocument] = Field(default_factory=list)
+    experience_items: list[BidChunkExperienceItem] = Field(default_factory=list)
+    certifications: list[BidChunkCertificationItem] = Field(default_factory=list)
+    personnel: list[BidChunkPersonnelItem] = Field(default_factory=list)
+    equipment: list[BidChunkEquipmentItem] = Field(default_factory=list)
+    technical_solution: list[BidChunkTextItem] = Field(default_factory=list)
+    service_commitments: list[BidChunkTextItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

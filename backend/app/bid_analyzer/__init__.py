@@ -5,6 +5,7 @@ from .bid_analyzer import BidAnalyzer, BidAnalyzerError
 from .models import (
     BidAnalysis,
     BidChunkAnalysis,
+    BidSourceEvidence,
     BidTextItem,
     CertificationItem,
     CommercialResponse,
@@ -24,6 +25,7 @@ __all__ = [
     "BidAnalyzerError",
     "BidAnalysis",
     "BidChunkAnalysis",
+    "BidSourceEvidence",
     "BidTextItem",
     "CertificationItem",
     "CommercialResponse",
