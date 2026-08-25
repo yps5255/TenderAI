@@ -66,8 +66,18 @@ _GROUP_INSTRUCTIONS = {
         "bidder submitted it."
     ),
     "technical": (
-        "Extract only the bidder actual technical responses, explicit deviation statements, and technical solution. "
-        "If a tender minimum is 100kW and the bidder states 120kW, extract the bidder response 120kW, not 100kW. "
+        "Extract only bidder actual technical responses, explicit bidder deviation statements, and the bidder's own "
+        "technical solution. A TechnicalResponse requires an explicit bidder technical statement, parameter "
+        "declaration, equipment configuration declaration, technical commitment, or response-table value. Tender, "
+        "procurement, negotiation, or copied-attachment technical requirements, specifications, parameters, service "
+        "requirements, evaluation or scoring criteria, and contract obligations are not bidder responses merely because "
+        "they appear inside a bid document. Normative wording alone (such as should, must, shall, may not, at least, "
+        "or required) is insufficient bidder-side support. Contract-template wording such as 'Party B shall' or "
+        "'supplier shall' is an obligation, not a bidder declaration, unless the bidder explicitly accepts or commits "
+        "to it. Evaluation tables and technical scoring criteria are not technical responses. If a chunk contains only "
+        "requirements or templates, return empty technical_responses, deviation_items, and technical_solution. If a "
+        "tender minimum is 100kW and the bidder states 120kW, extract the bidder response 120kW, not 100kW. In a "
+        "requirement-versus-response table, extract the bidder response cell, not the requirement cell. "
         "declared_status and deviation_type must reflect only explicit bidder statements; no-deviation is not your "
         "compliance judgment."
     ),

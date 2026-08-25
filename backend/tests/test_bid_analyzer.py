@@ -170,6 +170,25 @@ def test_prompt_requires_bid_facts_and_valid_evidence() -> None:
 @pytest.mark.parametrize(
     "expected_rule",
     [
+        "requires an explicit bidder technical statement",
+        "requirements, specifications, parameters, service requirements, evaluation or scoring criteria, and contract obligations are not bidder responses",
+        "Normative wording alone",
+        "Contract-template wording",
+        "Evaluation tables and technical scoring criteria are not technical responses",
+        "return empty technical_responses, deviation_items, and technical_solution",
+        "extract the bidder response cell, not the requirement cell",
+    ],
+)
+def test_technical_prompt_hardens_requirement_and_template_scope(expected_rule: str) -> None:
+    prompt = BidAnalyzer._messages(
+        "technical", BidTechnicalChunkAnalysis, DocumentChunk(chunk_index=0, content="synthetic")
+    )[0].content
+    assert expected_rule in prompt
+
+
+@pytest.mark.parametrize(
+    "expected_rule",
+    [
         "[P:7 PAGE:null], return source_ref P:7",
         "[T:3 PAGE:5], return source_ref T:3",
         "Never invent a source_ref",
