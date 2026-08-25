@@ -14,6 +14,7 @@ from ..analyzer.chunking import build_document_chunks
 from ..analyzer.models import DocumentChunk
 from ..llm.models import LLMMessage
 from ..llm.provider import LLMProvider
+from ..llm.exceptions import LLMStructuredOutputError
 from ..models import EvidenceReference, ParsedDocument
 from .models import (
     BidAnalysis,
@@ -168,9 +169,13 @@ class BidAnalyzer:
         self,
         provider: LLMProvider,
         chunk_builder: Callable[[ParsedDocument], list[DocumentChunk]] = build_document_chunks,
+        structured_output_retries: int = 1,
     ) -> None:
+        if structured_output_retries < 0:
+            raise ValueError("structured_output_retries must be non-negative")
         self.provider = provider
         self.chunk_builder = chunk_builder
+        self.structured_output_retries = structured_output_retries
 
     @staticmethod
     def _messages(group_id: str, response_model: type[BaseModel], chunk: DocumentChunk) -> list[LLMMessage]:
@@ -268,10 +273,17 @@ class BidAnalyzer:
         for chunk in chunks:
             failed_groups = 0
             for group_id, response_model, collection_fields in _GROUPS:
+                messages = self._messages(group_id, response_model, chunk)
                 try:
-                    result = self.provider.generate(
-                        self._messages(group_id, response_model, chunk), response_model
-                    )
+                    result = None
+                    for attempt in range(self.structured_output_retries + 1):
+                        try:
+                            result = self.provider.generate(messages, response_model)
+                            break
+                        except LLMStructuredOutputError:
+                            if attempt >= self.structured_output_retries:
+                                raise
+                    assert result is not None
                     results.append(
                         self._validate_group_result(result, collection_fields, chunk, document, warnings)
                     )

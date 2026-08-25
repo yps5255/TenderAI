@@ -37,7 +37,7 @@ from backend.app.bid_analyzer.models import (
     SubmittedDocument,
     TechnicalResponse,
 )
-from backend.app.llm.exceptions import LLMConnectionError
+from backend.app.llm.exceptions import LLMConfigurationError, LLMConnectionError, LLMStructuredOutputError
 from backend.app.llm.fake import FakeLLMProvider
 from backend.app.models import ContentBlockReference, EvidenceReference, Paragraph, ParsedDocument, Table
 
@@ -110,6 +110,50 @@ def test_single_chunk_bid_analysis() -> None:
         "BidCapabilityChunkAnalysis",
         "BidCommercialServiceChunkAnalysis",
     ]
+
+
+def test_structured_output_retries_default_once_and_recovers() -> None:
+    responses = [LLMStructuredOutputError("bad json"), *empty_groups()]
+    provider = ScriptedLLMProvider(responses)
+    result = BidAnalyzer(provider).analyze(document("facts", content_order=True))
+    assert len(provider.calls) == 5
+    assert [model.__name__ for model, _ in provider.calls[:2]] == [
+        "BidCoreDocumentsChunkAnalysis", "BidCoreDocumentsChunkAnalysis"
+    ]
+    assert result.warnings == []
+
+
+def test_structured_output_retry_reuses_same_prompt_and_schema() -> None:
+    provider = ScriptedLLMProvider([LLMStructuredOutputError("bad json"), *empty_groups()])
+    BidAnalyzer(provider).analyze(document("facts", content_order=True))
+    assert provider.calls[0][0] is provider.calls[1][0]
+    assert provider.calls[0][1] == provider.calls[1][1]
+
+
+def test_structured_output_retries_can_be_disabled() -> None:
+    provider = ScriptedLLMProvider([LLMStructuredOutputError("bad json"), *empty_groups()[1:]])
+    result = BidAnalyzer(provider, structured_output_retries=0).analyze(document("facts", content_order=True))
+    assert len(provider.calls) == 4
+    assert result.warnings == ["group_analysis_failed:core_documents:0"]
+
+
+def test_structured_output_retry_count_rejects_negative() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        BidAnalyzer(ScriptedLLMProvider(), structured_output_retries=-1)
+
+
+def test_exhausted_structured_retry_warns_and_continues_other_groups() -> None:
+    provider = ScriptedLLMProvider([LLMStructuredOutputError("one"), LLMStructuredOutputError("two"), *empty_groups()[1:]])
+    result = BidAnalyzer(provider).analyze(document("facts", content_order=True))
+    assert len(provider.calls) == 5
+    assert result.warnings == ["group_analysis_failed:core_documents:0"]
+
+
+def test_non_structured_error_is_not_retried() -> None:
+    provider = ScriptedLLMProvider([LLMConfigurationError("bad config"), *empty_groups()[1:]])
+    result = BidAnalyzer(provider).analyze(document("facts", content_order=True))
+    assert len(provider.calls) == 4
+    assert result.warnings == ["group_analysis_failed:core_documents:0"]
 
 
 def test_prompt_requires_bid_facts_and_valid_evidence() -> None:
