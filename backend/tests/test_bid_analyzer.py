@@ -217,6 +217,79 @@ def test_group_prompts_are_distinct_and_share_safety_rules() -> None:
     assert all("Never invent a source_ref" in prompt for prompt in prompts.values())
 
 
+def relevance_chunk(text: str) -> DocumentChunk:
+    return DocumentChunk(chunk_index=0, content=text)
+
+
+def test_relevance_gate_core_only_runs_core_and_skips_unrelated_groups() -> None:
+    chunk = relevance_chunk("项目名称：测试项目；已提交营业执照。").model_copy(update={"chunk_index": 0})
+    assert BidAnalyzer._should_run_group(chunk, "core_documents") is True
+    assert BidAnalyzer._should_run_group(chunk, "technical") is False
+    assert BidAnalyzer._should_run_group(chunk, "commercial_service") is False
+
+
+def test_relevance_gate_technical_and_capability_both_run() -> None:
+    chunk = relevance_chunk("技术参数：额定功率120kW；具有持证焊工12人。").model_copy(update={"chunk_index": 1})
+    assert BidAnalyzer._should_run_group(chunk, "technical") is True
+    assert BidAnalyzer._should_run_group(chunk, "capability") is True
+    assert BidAnalyzer._should_run_group(chunk, "core_documents") is False
+    assert BidAnalyzer._should_run_group(chunk, "commercial_service") is False
+
+
+def test_relevance_gate_commercial_and_capability_both_run() -> None:
+    chunk = relevance_chunk("投标报价人民币280万元；类似业绩合同金额500万元；ISO9001认证。").model_copy(update={"chunk_index": 2})
+    assert BidAnalyzer._should_run_group(chunk, "commercial_service") is True
+    assert BidAnalyzer._should_run_group(chunk, "capability") is True
+    assert BidAnalyzer._should_run_group(chunk, "core_documents") is False
+    assert BidAnalyzer._should_run_group(chunk, "technical") is False
+
+
+def test_relevance_gate_certification_submission_supports_core_and_capability() -> None:
+    chunk = relevance_chunk("认证证书已提交。").model_copy(update={"chunk_index": 0})
+    assert BidAnalyzer._should_run_group(chunk, "core_documents") is True
+    assert BidAnalyzer._should_run_group(chunk, "capability") is True
+
+
+@pytest.mark.parametrize("text", ["普通正文", "设备", "合同", "金额"])
+def test_relevance_gate_is_fail_open_for_unknown_or_weak_single_terms(text: str) -> None:
+    chunk = relevance_chunk(text)
+    assert all(BidAnalyzer._should_run_group(chunk, group) for group in (
+        "core_documents", "technical", "capability", "commercial_service"
+    ))
+
+
+def test_relevance_gate_normalization_and_determinism() -> None:
+    first = relevance_chunk("  项目名称：ＡＢＣ  ")
+    second = relevance_chunk("项目名称：ABC")
+    for group in ("core_documents", "technical", "capability", "commercial_service"):
+        assert BidAnalyzer._should_run_group(first, group) == BidAnalyzer._should_run_group(second, group)
+        assert BidAnalyzer._should_run_group(first, group) == BidAnalyzer._should_run_group(first, group)
+
+
+def test_skipped_groups_do_not_call_or_warn() -> None:
+    provider = ScriptedLLMProvider([BidCoreDocumentsChunkAnalysis(bidder="Example")])
+    result = BidAnalyzer(provider).analyze(document("项目名称：测试项目；投标人：Example", content_order=True))
+    assert len(provider.calls) == 1
+    assert result.warnings == []
+
+
+def test_unknown_chunk_still_calls_all_four_groups() -> None:
+    provider = ScriptedLLMProvider(empty_groups())
+    BidAnalyzer(provider).analyze(document("普通正文", content_order=True))
+    assert len(provider.calls) == 4
+
+
+def test_only_attempted_failed_group_gets_chunk_failure_warning() -> None:
+    provider = ScriptedLLMProvider([
+        LLMStructuredOutputError("one"), LLMStructuredOutputError("two"), *empty_groups()
+    ])
+    result = BidAnalyzer(provider, chunk_builder=one_paragraph_chunks).analyze(
+        document("项目名称：测试项目", "普通正文", content_order=True)
+    )
+    assert len(provider.calls) == 6
+    assert result.warnings == ["group_analysis_failed:core_documents:0", "chunk_analysis_failed:0"]
+
+
 def test_three_chunk_synthetic_merge() -> None:
     source = document("License and permit", "Technical response and deviation", "Price and service")
     first = BidCoreDocumentsChunkAnalysis(

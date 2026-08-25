@@ -80,6 +80,28 @@ _GROUP_INSTRUCTIONS = {
         "commitments. Do not use a price ceiling or tender-required delivery or validity terms as bidder declarations."
     ),
 }
+_GROUP_SIGNALS: dict[str, tuple[str, ...]] = {
+    "core_documents": (
+        "项目名称", "项目编号", "招标编号", "投标编号", "投标人", "投标单位", "供应商",
+        "资格材料", "资格证明", "资格文件", "营业执照", "许可证", "资质证书", "提交文件",
+        "已提交", "随投标文件提交", "投标文件组成", "附件清单",
+    ),
+    "technical": (
+        "技术响应", "技术要求", "技术参数", "技术规格", "规格参数", "性能参数", "额定", "功率",
+        "压力参数", "压力要求", "压力等级", "流量", "温度", "控制系统", "plc", "触摸屏", "远程监控", "技术方案", "工艺方案",
+        "偏离表", "技术偏离", "无偏离", "正偏离", "负偏离",
+    ),
+    "capability": (
+        "类似业绩", "项目业绩", "合同业绩", "客户", "合同金额", "完成时间", "认证", "iso9001",
+        "iso14001", "iso45001", "人员配置", "项目人员", "工程师", "技术人员", "焊工", "持证人员",
+        "设备能力", "生产设备", "检测设备", "试验设备", "数控切割", "设备台数",
+    ),
+    "commercial_service": (
+        "投标报价", "报价", "总价", "单价", "人民币", "万元", "交货期", "交货时间", "供货期", "工期",
+        "投标有效期", "有效期", "付款", "付款条件", "商务响应", "商务偏离", "售后", "售后服务",
+        "服务承诺", "质量保证", "质保", "保修", "维保",
+    ),
+}
 
 ItemT = TypeVar("ItemT", bound=BaseModel)
 
@@ -178,6 +200,18 @@ class BidAnalyzer:
         self.structured_output_retries = structured_output_retries
 
     @staticmethod
+    def _relevance_signals(chunk: DocumentChunk, group_id: str) -> tuple[str, ...]:
+        normalized = _WHITESPACE.sub(" ", unicodedata.normalize("NFKC", chunk.content)).casefold()
+        return tuple(signal for signal in _GROUP_SIGNALS[group_id] if signal.casefold() in normalized)
+
+    @classmethod
+    def _should_run_group(cls, chunk: DocumentChunk, group_id: str) -> bool:
+        target_signals = cls._relevance_signals(chunk, group_id)
+        if target_signals:
+            return True
+        return not any(cls._relevance_signals(chunk, other_id) for other_id, _, _ in _GROUPS if other_id != group_id)
+
+    @staticmethod
     def _messages(group_id: str, response_model: type[BaseModel], chunk: DocumentChunk) -> list[LLMMessage]:
         schema = response_model.model_json_schema()
         system = (
@@ -272,7 +306,11 @@ class BidAnalyzer:
         last_error: Exception | None = None
         for chunk in chunks:
             failed_groups = 0
+            attempted_groups = 0
             for group_id, response_model, collection_fields in _GROUPS:
+                if not self._should_run_group(chunk, group_id):
+                    continue
+                attempted_groups += 1
                 messages = self._messages(group_id, response_model, chunk)
                 try:
                     result = None
@@ -291,7 +329,7 @@ class BidAnalyzer:
                     last_error = exc
                     failed_groups += 1
                     warnings.append(f"group_analysis_failed:{group_id}:{chunk.chunk_index}")
-            if failed_groups == len(_GROUPS):
+            if attempted_groups > 0 and failed_groups == attempted_groups:
                 warnings.append(f"chunk_analysis_failed:{chunk.chunk_index}")
         if not results:
             raise BidAnalyzerError("All document chunks failed analysis.") from last_error
